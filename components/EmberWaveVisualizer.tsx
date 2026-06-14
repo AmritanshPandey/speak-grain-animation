@@ -39,6 +39,37 @@ export type VoiceState =
   | "speaking"
   | "complete";
 
+/* ---------------------------------------------------------------- variants */
+
+export type WaveVariantId = "ribbon" | "dunes" | "helix" | "swarm";
+
+export interface WaveVariant {
+  id: WaveVariantId;
+  label: string;
+  /** Short line describing the formation, for the switcher UI. */
+  hint: string;
+  /** Index of the shape branch in the vertex shader (uShape). */
+  shape: number;
+}
+
+/**
+ * Every variation shares the same ember palette and voice-reactivity — only
+ * the particle formation and motion differ. Add one here and it appears in the
+ * switcher automatically. `shape` must match a branch in the vertex shader.
+ */
+export const WAVE_VARIANTS: WaveVariant[] = [
+  { id: "ribbon", label: "Ribbon", hint: "A twisting sound ribbon", shape: 0 },
+  { id: "dunes", label: "Dunes", hint: "A broad rolling sand field", shape: 1 },
+  { id: "helix", label: "Helix", hint: "Two braiding sand strands", shape: 2 },
+  { id: "swarm", label: "Swarm", hint: "Agitated, wind-blown sand", shape: 3 },
+];
+
+export const DEFAULT_VARIANT: WaveVariantId = "ribbon";
+
+function variantFor(id: WaveVariantId): WaveVariant {
+  return WAVE_VARIANTS.find((v) => v.id === id) ?? WAVE_VARIANTS[0];
+}
+
 /** Per-state scalar targets. Damped toward, never set directly. */
 interface StatePreset {
   amplitude: number; // wave height
@@ -61,9 +92,9 @@ const STATE_PRESETS: Record<VoiceState, StatePreset> = {
     converge: 0,
   },
   listening: {
-    amplitude: 1.0,
-    speed: 0.4,
-    brightness: 1.0,
+    amplitude: 1.08,
+    speed: 0.42,
+    brightness: 1.05,
     swirl: 0,
     focus: 0.65,
     shimmer: 0.08,
@@ -79,12 +110,12 @@ const STATE_PRESETS: Record<VoiceState, StatePreset> = {
     converge: 0,
   },
   speaking: {
-    amplitude: 1.35,
-    speed: 1.0,
-    brightness: 1.2,
+    amplitude: 1.5,
+    speed: 1.05,
+    brightness: 1.32,
     swirl: 0,
     focus: 0.12,
-    shimmer: 0.7,
+    shimmer: 0.85,
     converge: 0,
   },
   complete: {
@@ -117,6 +148,7 @@ const vertexShader = /* glsl */ `
   uniform float uSpanX;     // grid width, for hue normalization
   uniform float uSpanZ;     // grid depth → ribbon width normalization
   uniform float uFit;       // grid→viewport scale: same composition on any screen
+  uniform float uShape;     // 0 ribbon · 1 dunes · 2 helix · 3 swarm
 
   attribute float aScale;   // per-grain size variance
   attribute float aRandom;  // per-grain randomness 0..1
@@ -149,43 +181,85 @@ const vertexShader = /* glsl */ `
       // The grid's z column becomes this grain's seat across the band
       // width, normalized to [-1, 1].
       float zn = position.z / (uSpanZ * 0.5);
+      float seed = aRandom * 6.2831;
 
-      // Meandering centerline — drifting harmonics with slowly modulated
-      // phase, so the path flows like a living waveform instead of
-      // repeating a fixed loop.
-      float center = sin(xq * 8.8 + t * 0.9 + 0.5 * sin(t * 0.21)) * 1.6
-                   + sin(xq * 16.0 - t * 0.6) * 0.55
-                   + sin(xq * 3.6 + t * 0.35) * 0.8;
+      // Each formation fills these: vertical (height), depth offset (zdep),
+      // a fine grain shiver (ripple), and three lighting hints (crest glow,
+      // node/pinch glow, rim light). Shape, motion and density differ; the
+      // ember palette and voice-reactivity (uAmplitude/uSwirl/…) are shared.
+      float height = 0.0;
+      float zdep = 0.0;
+      float ripple = 0.0;
+      float crest = 0.0;
+      float nodeGlow = 0.0;
+      float rim = 0.0;
 
-      // SIGNED half-width envelope, its phase breathing slowly. At zero
-      // crossings the band pinches shut and the grains cross over — the
-      // twist nodes. Thinking adds a second twist term; Listening draws
-      // the band tighter together.
-      float wave = sin(xq * 9.0 - t * 0.5 + 0.6 * sin(t * 0.23 + xq * 3.0))
-                 + uSwirl * 0.45 * sin(xq * 15.0 + t * 0.8);
-      float width = wave * 1.1 * (1.0 - uFocus * 0.35);
-
-      // Complete: settle into one clean, narrow band.
-      center = mix(center, sin(xq * 8.8 + t * 0.9) * 1.2, uConverge);
-      width *= (1.0 - uConverge * 0.6);
-
-      // Fine cross-ripple so the band shivers like a sounding string;
-      // thinking churns it harder.
-      float ripple = sin(xq * 30.0 + zn * 2.0 + t * 1.3) * (0.07 + uSwirl * 0.10);
+      if (uShape < 0.5) {
+        // -------- RIBBON: a thin, twisting sound ribbon (the default). ----
+        float center = sin(xq * 8.8 + t * 0.9 + 0.5 * sin(t * 0.21)) * 1.6
+                     + sin(xq * 16.0 - t * 0.6) * 0.55
+                     + sin(xq * 3.6 + t * 0.35) * 0.8;
+        // Signed half-width: at zero crossings the band pinches and the rows
+        // cross over — the twist nodes. Thinking adds a second twist.
+        float wave = sin(xq * 9.0 - t * 0.5 + 0.6 * sin(t * 0.23 + xq * 3.0))
+                   + uSwirl * 0.45 * sin(xq * 15.0 + t * 0.8);
+        float width = wave * 1.1 * (1.0 - uFocus * 0.35);
+        center = mix(center, sin(xq * 8.8 + t * 0.9) * 1.2, uConverge);
+        width *= (1.0 - uConverge * 0.6);
+        ripple = sin(xq * 30.0 + zn * 2.0 + t * 1.3) * (0.07 + uSwirl * 0.10);
+        height = center * 0.95 + zn * width * 0.75;
+        zdep = zn * 0.8;
+        crest = smoothstep(-1.6, 2.2, center);
+        nodeGlow = 1.0 - smoothstep(0.0, 0.55, abs(wave));
+        rim = smoothstep(0.5, 1.0, abs(zn));
+      } else if (uShape < 1.5) {
+        // -------- DUNES: a broad, calm rolling field with real depth. -----
+        float zf = zn * 3.4;
+        float center = sin(xq * 5.5 + t * 0.62) * 1.3
+                     + sin(xq * 9.0 - t * 0.4 + zf * 0.45) * 0.6
+                     + sin(zf * 0.8 + t * 0.5) * 0.5;
+        center = mix(center, sin(xq * 5.5 + t * 0.62) * 1.2, uConverge);
+        ripple = sin(xq * 22.0 + zf * 1.2 + t * 1.0) * (0.09 + uSwirl * 0.06);
+        height = center;
+        zdep = zf;
+        crest = smoothstep(-1.9, 2.0, center);
+        rim = smoothstep(0.55, 1.0, abs(zn)) * 0.5;
+      } else if (uShape < 2.5) {
+        // -------- HELIX: two sand strands braiding around the axis. -------
+        float strand = step(0.0, zn) * 2.0 - 1.0;     // -1 / +1
+        float ang = xq * 11.0 - t * 1.1 + (strand > 0.0 ? 0.0 : 3.14159);
+        float rad = (0.9 + 0.25 * sin(xq * 5.0 + t * 0.4)) * (1.0 - uConverge * 0.4);
+        float yy = sin(ang) * rad;
+        float zz = cos(ang) * rad;
+        // Scatter each grain into a soft tube so a strand has body.
+        height = yy + (aRandom - 0.5) * 0.55;
+        zdep = zz * 0.9 + (fract(aRandom * 7.0) - 0.5) * 0.5;
+        ripple = sin(seed + t * 1.4) * 0.05;
+        crest = smoothstep(-1.4, 1.8, yy);
+        // The two strands flare where they cross near the axis.
+        nodeGlow = (1.0 - smoothstep(0.0, 0.4, abs(yy)))
+                 * (1.0 - smoothstep(0.0, 0.5, abs(zz))) * 0.9;
+        rim = abs(zn) * 0.4;
+      } else {
+        // -------- SWARM: agitated sand caught in the wind. ----------------
+        float center = sin(xq * 6.0 + t * 0.7) * 1.0
+                     + sin(xq * 11.0 - t * 0.5) * 0.5;
+        float turb = sin(t * 1.4 + seed) * 0.7 + sin(t * 2.3 + seed * 1.7) * 0.45;
+        height = center * 0.7 + zn * 0.8 + turb * (0.7 + uSwirl * 0.4);
+        zdep = zn * 1.4 + sin(t * 1.0 + seed) * 0.7;
+        ripple = sin(xq * 18.0 + seed + t * 1.6) * 0.22;
+        crest = smoothstep(-1.9, 2.1, center + turb * 0.5);
+        rim = smoothstep(0.4, 1.0, abs(zn)) * 0.4;
+      }
 
       pos.x = position.x * uFit;
-      pos.y = (center * 0.95 + zn * width * 0.75) * uAmplitude + ripple
-            + (aRandom - 0.5) * 0.14;
-      pos.z = zn * 0.8 + uDepth;
+      pos.y = height * uAmplitude + ripple + (aRandom - 0.5) * 0.14;
+      pos.z = zdep + uDepth;
 
       vec4 mv = modelViewMatrix * vec4(pos, 1.0);
 
-      // Lighting: crests glow, the pinch nodes burn hottest (every grain
-      // converges there), the band's outer flanks catch a rim light, a
-      // slow highlight sweeps along the length.
-      float crest = smoothstep(-1.6, 2.2, center);
-      float nodeGlow = 1.0 - smoothstep(0.0, 0.55, abs(wave));
-      float rim = smoothstep(0.5, 1.0, abs(zn));
+      // Shared lighting: crest glow + per-shape node/rim + a slow sweeping
+      // highlight, faded by depth and near the camera.
       float band = smoothstep(0.65, 1.0, sin(xq * 6.4 + t * 0.5) * 0.5 + 0.5);
       float depthFade = 1.0 - smoothstep(26.0, 48.0, -mv.z);
       // Grains drifting too near the camera would blow up into huge bokeh
@@ -494,11 +568,12 @@ function stepCadence(c: CadenceState, state: VoiceState, dt: number): number {
       }
     }
     if (c.phase !== "burst") return 0;
-    // Syllable energy: re-roll 4–7 times a second.
+    // Syllable energy: re-roll 4–7 times a second, biased toward strong hits
+    // so spoken phrases punch rather than murmur.
     c.syllLeft -= dt;
     if (c.syllLeft <= 0) {
-      c.syllLeft = 0.12 + Math.random() * 0.16;
-      c.syllLevel = 0.35 + Math.random() * 0.65;
+      c.syllLeft = 0.1 + Math.random() * 0.14;
+      c.syllLevel = 0.55 + Math.random() * 0.45;
     }
     // Phrase-final fall: let the last ~0.4s of a phrase trail off.
     return c.syllLevel * Math.min(1, c.phaseLeft / 0.4);
@@ -551,10 +626,14 @@ function ParticleField({
   state,
   particleCount,
   reducedMotion,
+  liveLevel,
+  shape,
 }: {
   state: VoiceState;
   particleCount: number;
   reducedMotion: boolean;
+  liveLevel?: React.RefObject<(() => number) | null>;
+  shape: number;
 }) {
   const live = useRef<LiveMotion>({
     time: 0,
@@ -588,7 +667,7 @@ function ParticleField({
     // at every state change. This way speed ramps only ease the flow rate.
     // The voice level also surges the flow slightly, so syllables push the
     // wave forward instead of only inflating it.
-    if (!reducedMotion) l.time += dt * l.speed * (1 + l.voiceLevel * 0.25);
+    if (!reducedMotion) l.time += dt * l.speed * (1 + l.voiceLevel * 0.45);
 
     // Critically-damped easing toward each target (~1.5s glide).
     const k = 1 - Math.exp(-dt / 0.5);
@@ -600,11 +679,18 @@ function ParticleField({
     l.shimmer += (target.shimmer - l.shimmer) * k;
     l.converge += (target.converge - l.converge) * k;
 
-    // Conversational cadence → asymmetric audio-meter smoothing: fast
-    // attack so bursts land, slow release so they decay gracefully. The
-    // asymmetry is what makes it feel alive without feeling jumpy.
-    const voice = reducedMotion ? 0 : stepCadence(cadence.current, state, dt);
-    const tau = voice > l.voiceLevel ? 0.07 : 0.28;
+    // Voice level → asymmetric audio-meter smoothing: fast attack so bursts
+    // land, slow release so they decay gracefully. The asymmetry is what
+    // makes it feel alive without feeling jumpy. When a live audio source is
+    // attached (real mic / spoken-word pulses) it drives the level directly;
+    // otherwise the synthesized conversational cadence does.
+    const ext = liveLevel?.current;
+    const voice = reducedMotion
+      ? 0
+      : ext
+        ? Math.min(1, Math.max(0, ext()))
+        : stepCadence(cadence.current, state, dt);
+    const tau = voice > l.voiceLevel ? 0.05 : 0.26;
     l.voiceLevel += (voice - l.voiceLevel) * (1 - Math.exp(-dt / tau));
   });
 
@@ -617,6 +703,7 @@ function ParticleField({
           particleCount={particleCount}
           live={live}
           reducedMotion={reducedMotion}
+          shape={shape}
         />
       ))}
     </>
@@ -632,11 +719,13 @@ function ParticleLayer({
   particleCount,
   live,
   reducedMotion,
+  shape,
 }: {
   cfg: LayerConfig;
   particleCount: number;
   live: React.RefObject<LiveMotion>;
   reducedMotion: boolean;
+  shape: number;
 }) {
   const pointsRef = useRef<THREE.Points>(null);
   const { gl } = useThree();
@@ -672,12 +761,16 @@ function ParticleLayer({
         uSoft: { value: cfg.soft },
         uBrightMul: { value: cfg.brightMul },
         uGoldBias: { value: cfg.goldBias },
+        uShape: { value: shape },
       },
       transparent: true,
       depthWrite: false,
       depthTest: false,
       blending: THREE.AdditiveBlending,
     });
+    // uShape is synced per-frame so switching formations never recreates the
+    // material (and its GPU buffers).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg, gl]);
 
   // Release GPU resources when this layer's geometry/material is replaced.
@@ -696,12 +789,17 @@ function ParticleLayer({
     // Fit the grid to the visible width (slight overscan so the wave exits
     // the frame) — phones get the same full composition as wide screens.
     u.uFit.value = Math.min((st.viewport.width * 1.18) / cfg.spanX, 1.5);
+    u.uShape.value = shape;
     // l.time is already speed-integrated phase, so uSpeed stays at 1 —
     // writing the damped speed here too would double-apply it.
     u.uTime.value = l.time;
-    u.uAmplitude.value = l.amplitude * cfg.ampFactor * (1 + l.voiceLevel * 0.5);
+    // Non-linear "punch": the squared term lets loud moments spike the wave
+    // dramatically (like an audio meter slamming) while quiet stays calm.
+    const v = l.voiceLevel;
+    const punch = v * 0.7 + v * v * 0.85;
+    u.uAmplitude.value = l.amplitude * cfg.ampFactor * (1 + punch);
     u.uBrightness.value =
-      l.brightness * cfg.brightFactor * (1 + l.voiceLevel * 0.35);
+      l.brightness * cfg.brightFactor * (1 + v * 0.4 + v * v * 0.4);
     // Thinking's hesitation ticks ripple through the churn (swirl is 0 in
     // every other state, so this is inert elsewhere).
     u.uSwirl.value = l.swirl * (1 + l.voiceLevel * 0.6);
@@ -723,18 +821,31 @@ export interface EmberWaveVisualizerProps {
   particleCount?: number;
   /** Extra classes for the absolutely-positioned wrapper. */
   className?: string;
+  /**
+   * Optional live audio source. When `.current` is a function it's read each
+   * frame for a 0–1 level (real mic RMS while listening, spoken-word pulses
+   * while speaking) that drives the wave directly; when null the synthesized
+   * cadence takes over. A ref so attaching/detaching never re-renders R3F.
+   */
+  liveLevel?: React.RefObject<(() => number) | null>;
+  /** Particle formation — same ember palette, different shape and motion. */
+  variant?: WaveVariantId;
 }
 
 export default function EmberWaveVisualizer({
   state = "idle",
   particleCount = 24000,
   className = "",
+  liveLevel,
+  variant = DEFAULT_VARIANT,
 }: EmberWaveVisualizerProps) {
   // Respect reduced motion (read once on mount).
   const reducedMotion = useMemo(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }, []);
+
+  const shape = variantFor(variant).shape;
 
   // 3–5% film grain via an inline SVG turbulence — no extra dependency.
   const noiseUrl = useMemo(
@@ -769,6 +880,8 @@ export default function EmberWaveVisualizer({
           state={state}
           particleCount={particleCount}
           reducedMotion={reducedMotion}
+          liveLevel={liveLevel}
+          shape={shape}
         />
       </Canvas>
 

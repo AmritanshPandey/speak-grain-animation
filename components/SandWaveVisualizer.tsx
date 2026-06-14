@@ -54,42 +54,42 @@ interface StatePreset {
 const STATE_PRESETS: Record<VoiceState, StatePreset> = {
   // Slow, calm, relaxed spread.
   idle: {
-    amplitude: 0.85,
-    speed: 0.22,
-    brightness: 0.7,
+    amplitude: 0.48,
+    speed: 0.16,
+    brightness: 0.82,
     swirl: 0,
-    focus: 0,
-    shimmer: 0,
+    focus: 0.1,
+    shimmer: 0.12,
     converge: 0,
   },
   // Tightens toward center, slightly brighter, more focused.
   listening: {
-    amplitude: 0.95,
-    speed: 0.42,
-    brightness: 0.95,
+    amplitude: 0.62,
+    speed: 0.32,
+    brightness: 1.02,
     swirl: 0,
-    focus: 0.7,
-    shimmer: 0.08,
+    focus: 0.55,
+    shimmer: 0.18,
     converge: 0,
   },
   // Denser, churning inward swirl, slower but concentrated.
   thinking: {
-    amplitude: 0.8,
-    speed: 0.5,
-    brightness: 0.85,
-    swirl: 1.0,
-    focus: 0.3,
-    shimmer: 0,
+    amplitude: 0.7,
+    speed: 0.42,
+    brightness: 0.95,
+    swirl: 0.65,
+    focus: 0.35,
+    shimmer: 0.14,
     converge: 0,
   },
   // Taller, faster waves with an elegant shimmer.
   speaking: {
-    amplitude: 1.7,
-    speed: 1.05,
-    brightness: 1.25,
+    amplitude: 1.05,
+    speed: 0.78,
+    brightness: 1.28,
     swirl: 0,
-    focus: 0.15,
-    shimmer: 0.7,
+    focus: 0.2,
+    shimmer: 0.55,
     converge: 0,
   },
   // Grains align into a clean wave; a brief golden pulse fires on entry.
@@ -152,12 +152,12 @@ const vertexShader = /* glsl */ `
 
       // Layered traveling sine waves → interfering, organic dune ridges.
       float h = 0.0;
-      h += sin(pos.x * 0.28 + t) * 1.00;
-      h += sin(pos.z * 0.38 - t * 0.80) * 0.75;
-      h += sin((pos.x + pos.z) * 0.20 + t * 0.55) * 0.55;
-      h += sin((pos.x - pos.z) * 0.33 - t * 1.05) * 0.35;
+      h += sin(pos.x * 0.34 + t * 0.95) * 0.72;
+      h += sin(pos.z * 0.42 - t * 0.70) * 0.46;
+      h += sin((pos.x + pos.z) * 0.18 + t * 0.42) * 0.34;
+      h += sin((pos.x - pos.z) * 0.29 - t * 0.88) * 0.22;
       // Fine per-grain jitter → the sandy, granular surface.
-      h += sin(pos.x * 1.2 + pos.z * 1.05 + t * 1.6 + aRandom * 6.2831) * 0.16;
+      h += sin(pos.x * 1.65 + pos.z * 1.45 + t * 1.25 + aRandom * 6.2831) * 0.10;
 
       // Complete: ease toward a single clean wave (drop jitter + cross ripples)
       // for a momentary, ordered surface.
@@ -172,13 +172,14 @@ const vertexShader = /* glsl */ `
       // Brightness: crests glow; a slow band sweeps a highlight across; far
       // grains fade to black; focus adds a soft center bloom; speaking adds a
       // restrained per-grain shimmer; complete fires a crest pulse.
-      float crest = smoothstep(-1.0, 1.6, h);
-      float band = smoothstep(0.65, 1.0, sin(pos.x * 0.14 - pos.z * 0.09 + t * 0.5) * 0.5 + 0.5);
-      float depthFade = 1.0 - smoothstep(12.0, 32.0, -mv.z);
-      float centerBoost = uFocus * smoothstep(8.0, 0.0, length(pos.xz)) * 0.35;
-      float shimmer = uShimmer * (0.5 + 0.5 * sin(aRandom * 120.0 + uTime * 7.0)) * 0.3;
+      float crest = smoothstep(0.18, 1.02, h);
+      float ridge = smoothstep(0.74, 1.0, crest);
+      float band = smoothstep(0.78, 1.0, sin(pos.x * 0.18 - pos.z * 0.08 + t * 0.42) * 0.5 + 0.5);
+      float depthFade = 1.0 - smoothstep(10.0, 30.0, -mv.z);
+      float centerBoost = uFocus * smoothstep(7.0, 0.0, length(pos.xz)) * 0.25;
+      float shimmer = uShimmer * (0.5 + 0.5 * sin(aRandom * 150.0 + uTime * 6.0)) * 0.24;
 
-      vBright = uBrightness * (0.26 + crest * 0.80 + band * 0.38 + centerBoost + shimmer) * depthFade;
+      vBright = uBrightness * (0.14 + crest * 0.42 + ridge * 0.72 + band * 0.32 + centerBoost + shimmer) * depthFade;
       vBright += uPulse * 0.9 * crest;
       vRandom = aRandom;
 
@@ -220,32 +221,24 @@ const fragmentShader = /* glsl */ `
     float sprite = smoothstep(0.5, max(0.5 - uSoft, 0.0), d);
     if (sprite <= 0.001) discard;
 
-    // Restrained premium palette.
-vec3 amber     = vec3(0.659, 0.416, 0.141);
+    // Mastercard-inspired red → orange → yellow palette.
+    vec3 mcRed    = vec3(0.92, 0.04, 0.02);
+    vec3 mcOrange = vec3(1.00, 0.34, 0.02);
+    vec3 mcYellow = vec3(1.00, 0.76, 0.08);
+    vec3 warmGold = vec3(1.00, 0.88, 0.55);
 
-vec3 gold      = vec3(0.784, 0.580, 0.271);
+    float b = clamp(vBright, 0.0, 1.45);
+    float sideMix = smoothstep(-18.0, 18.0, gl_FragCoord.x - 0.5 * 390.0);
 
-vec3 champagne = vec3(0.957, 0.847, 0.643);
+    vec3 col = mix(mcRed, mcOrange, sideMix);
+    col = mix(col, mcYellow, smoothstep(0.45, 1.15, b));
+    col = mix(col, warmGold, smoothstep(1.05, 1.45, b));
+    col = mix(col, mcYellow, uChampagne * 0.18);
 
-vec3 white     = vec3(1.000, 0.953, 0.816);
-
-vec3 red       = vec3(0.95, 0.08, 0.04);
-
-float b = clamp(vBright, 0.0, 1.6);
-
-vec3 col = mix(amber, gold, smoothstep(0.0, 0.55, b));
-
-col = mix(col, champagne, smoothstep(0.55, 1.0, b));
-
-col = mix(col, white, smoothstep(1.0, 1.45, b));
-
-col = mix(col, champagne, uChampagne * 0.35);
-
-col = mix(col, red, 0.28);
-
-    // Per-grain opacity variance keeps the field granular, never a flat sheet.
-    float grain = mix(0.45, 1.0, vRandom);
-   float alpha = sprite * grain * clamp(b, 0.0, 1.2) * uBrightMul * 0.75;
+    // More granular opacity variation keeps the field detailed, not glowy.
+    float grain = mix(0.18, 0.92, vRandom);
+    float microFleck = smoothstep(0.08, 1.0, fract(vRandom * 61.0));
+    float alpha = sprite * grain * microFleck * clamp(b, 0.0, 1.0) * uBrightMul * 0.62;
 
     // Additive, but rgb is pre-weighted by brightness so dark troughs add
     // almost nothing — glow stays restrained.
@@ -272,66 +265,66 @@ interface LayerConfig {
 }
 
 const LAYERS: LayerConfig[] = [
-  // Far, soft, dim atmosphere.
+  // Soft background haze, mostly hidden in black.
   {
     name: "haze",
     mode: "wave",
-    share: 0.16,
-    size: 72,
-    soft: 0.45,
-    brightMul: 0.5,
+    share: 0.12,
+    size: 30,
+    soft: 0.34,
+    brightMul: 0.2,
     champagne: 0.0,
-    depth: -6,
-    ampFactor: 0.7,
-    brightFactor: 0.6,
-    spanX: 44,
-    spanZ: 30,
+    depth: -7,
+    ampFactor: 0.46,
+    brightFactor: 0.48,
+    spanX: 46,
+    spanZ: 28,
   },
-  // The hero wave.
+  // Dense low ribbon.
   {
     name: "main",
     mode: "wave",
-    share: 0.55,
-    size: 26,
-    soft: 0.3,
-    brightMul: 1.0,
-    champagne: 0.12,
+    share: 0.58,
+    size: 10,
+    soft: 0.12,
+    brightMul: 0.76,
+    champagne: 0.08,
     depth: 0,
-    ampFactor: 1.0,
+    ampFactor: 0.78,
     brightFactor: 1.0,
-    spanX: 36,
-    spanZ: 24,
+    spanX: 38,
+    spanZ: 18,
   },
-  // Crisper champagne grains up front.
+  // Thin bright crest line.
   {
     name: "fore",
     mode: "wave",
     share: 0.22,
-    size: 17,
-    soft: 0.16,
-    brightMul: 1.0,
-    champagne: 0.5,
-    depth: 3.5,
-    ampFactor: 1.08,
-    brightFactor: 1.05,
-    spanX: 30,
-    spanZ: 18,
+    size: 6,
+    soft: 0.07,
+    brightMul: 1.15,
+    champagne: 0.32,
+    depth: 4,
+    ampFactor: 0.86,
+    brightFactor: 1.22,
+    spanX: 32,
+    spanZ: 12,
   },
-  // Sparse floating dust.
+  // Sparse floating particles above the wave.
   {
     name: "dust",
     mode: "dust",
-    share: 0.07,
-    size: 11,
-    soft: 0.32,
-    brightMul: 0.8,
-    champagne: 0.6,
-    depth: 2,
+    share: 0.08,
+    size: 5,
+    soft: 0.2,
+    brightMul: 0.34,
+    champagne: 0.2,
+    depth: 1.5,
     ampFactor: 1.0,
-    brightFactor: 1.0,
-    spanX: 36,
-    spanZ: 22,
-    spanY: 12,
+    brightFactor: 0.8,
+    spanX: 32,
+    spanZ: 16,
+    spanY: 8,
   },
 ];
 
@@ -355,7 +348,7 @@ function buildWaveGeometry(count: number, spanX: number, spanZ: number) {
       positions[i * 3 + 0] = (c / (cols - 1) - 0.5) * spanX;
       positions[i * 3 + 1] = 0;
       positions[i * 3 + 2] = (r / (rows - 1) - 0.5) * spanZ;
-      scales[i] = 0.6 + Math.random() * 1.0;
+      scales[i] = 0.35 + Math.random() * 0.85;
       randoms[i] = Math.random();
       seeds[i * 3 + 0] = Math.random();
       seeds[i * 3 + 1] = Math.random();
@@ -382,7 +375,7 @@ function buildDustGeometry(
     positions[i * 3 + 0] = (Math.random() - 0.5) * spanX;
     positions[i * 3 + 1] = (Math.random() - 0.5) * spanY;
     positions[i * 3 + 2] = (Math.random() - 0.5) * spanZ;
-    scales[i] = 0.5 + Math.random() * 1.2;
+    scales[i] = 0.35 + Math.random() * 0.9;
     randoms[i] = Math.random();
     seeds[i * 3 + 0] = Math.random();
     seeds[i * 3 + 1] = Math.random();
@@ -571,7 +564,7 @@ export interface SandWaveVisualizerProps {
 
 export default function SandWaveVisualizer({
   state = "idle",
-  particleCount = 13000,
+  particleCount = 24000,
   className = "",
 }: SandWaveVisualizerProps) {
   // Respect reduced motion (read once on mount).
@@ -596,17 +589,17 @@ export default function SandWaveVisualizer({
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(60% 55% at 50% 62%, rgba(168,106,36,0.35) 0%, rgba(120,11,5,0.0) 55%), radial-gradient(45% 40% at 30% 28%, rgba(244,216,164,0.10) 0%, rgba(0,0,0,0) 60%)",
+            "radial-gradient(58% 34% at 50% 66%, rgba(255,108,16,0.24) 0%, rgba(214,22,5,0.12) 38%, rgba(0,0,0,0) 68%), radial-gradient(34% 26% at 74% 64%, rgba(255,190,24,0.18) 0%, rgba(0,0,0,0) 62%)",
         }}
       />
 
       {/* The particle field. Canvas is transparent so the glow shows through. */}
       <Canvas
         className="!absolute inset-0"
-        camera={{ position: [0, 6, 14], fov: 55, near: 0.1, far: 100 }}
+        camera={{ position: [0, 5.4, 16], fov: 48, near: 0.1, far: 100 }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: true }}
-        onCreated={({ camera }) => camera.lookAt(0, -1, -2)}
+        onCreated={({ camera }) => camera.lookAt(0, -1.8, -2)}
       >
         <ParticleField
           state={state}
@@ -620,7 +613,7 @@ export default function SandWaveVisualizer({
         className="absolute inset-0 mix-blend-screen"
         style={{
           background:
-            "radial-gradient(38% 38% at 22% 18%, rgba(255,243,208,0.10) 0%, rgba(0,0,0,0) 60%)",
+            "radial-gradient(36% 30% at 26% 32%, rgba(255,118,24,0.16) 0%, rgba(0,0,0,0) 62%)",
         }}
       />
 
@@ -629,7 +622,7 @@ export default function SandWaveVisualizer({
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(75% 75% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.85) 100%)",
+            "radial-gradient(70% 58% at 50% 58%, rgba(0,0,0,0) 38%, rgba(0,0,0,0.78) 76%, rgba(0,0,0,0.96) 100%)",
         }}
       />
 

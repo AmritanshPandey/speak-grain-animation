@@ -7,21 +7,29 @@
  * the upper half, and the ember particle ridge flowing across the lower
  * third.
  *
- * The surface runs itself — a scripted loop mimics a live conversation,
- * cycling idle → listening → thinking → speaking with natural dwell times.
- * While listening/speaking, the visualizer adds a synthesized voice cadence
- * so the wave pulses like real speech. No interaction required.
+ * Two modes, chosen automatically:
+ *   • Live  — when the browser supports speech and the mic is granted, a real
+ *             voice loop runs (see useBrowserVoice): your microphone drives
+ *             "listening", a short "thinking" beat follows, then the browser
+ *             speaks a reply with the wave pulsing per word.
+ *   • Ambient — otherwise (unsupported browser, mic denied, or before the
+ *             session starts) a synthesized conversation loops so the screen
+ *             is never dead.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import EmberWaveVisualizer, {
+  DEFAULT_VARIANT,
   type VoiceState,
+  type WaveVariantId,
 } from "@/components/EmberWaveVisualizer";
+import { useBrowserVoice } from "@/components/useBrowserVoice";
+import WaveVariantSwitcher from "@/components/WaveVariantSwitcher";
 
-/** One simulated conversation turn: state + how long to hold it. The
- * "complete" pulse is deliberately left out — its flash reads as a jump
- * in an ambient loop. */
+const VARIANT_KEY = "voiceWaveFormation";
+
+/** One simulated conversation turn, used only as the ambient fallback. */
 const SCRIPT: { state: VoiceState; ms: number }[] = [
   { state: "idle", ms: 4000 },
   { state: "listening", ms: 4200 },
@@ -42,36 +50,109 @@ const CAPTION: Record<VoiceState, string> = {
 };
 
 export default function VoiceHero() {
-  const [step, setStep] = useState(0);
-  const { state, ms } = SCRIPT[step];
+  const voice = useBrowserVoice();
 
-  // Walk the scripted conversation loop forever.
+  // Color variation, remembered across visits.
+  const [variant, setVariant] = useState<WaveVariantId>(DEFAULT_VARIANT);
   useEffect(() => {
+    const saved = localStorage.getItem(VARIANT_KEY) as WaveVariantId | null;
+    if (saved) setVariant(saved);
+  }, []);
+  const chooseVariant = useCallback((v: WaveVariantId) => {
+    setVariant(v);
+    localStorage.setItem(VARIANT_KEY, v);
+  }, []);
+
+  // Ambient fallback clock — only advances while the live loop is inactive.
+  const [step, setStep] = useState(0);
+  const ambient = SCRIPT[step];
+  useEffect(() => {
+    if (voice.active) return; // live loop owns the state
     const timer = setTimeout(
       () => setStep((s) => (s + 1) % SCRIPT.length),
-      ms
+      ambient.ms
     );
     return () => clearTimeout(timer);
-  }, [step, ms]);
+  }, [step, ambient.ms, voice.active]);
 
+  // Auto-start on load; if blocked (gesture/permission), retry on the first
+  // user interaction, then stop retrying. `start`/`supported` are stable, so
+  // this runs once on mount.
+  const { supported, start } = voice;
+  useEffect(() => {
+    if (!supported) return;
+    let cancelled = false;
+
+    const detach = () => {
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+    const attempt = () => {
+      start().then((ok) => {
+        if (ok || cancelled) detach();
+      });
+    };
+    const onGesture = () => {
+      detach();
+      attempt();
+    };
+
+    attempt(); // try immediately (auto-prompt on load)
+    window.addEventListener("pointerdown", onGesture);
+    window.addEventListener("keydown", onGesture);
+    return () => {
+      cancelled = true;
+      detach();
+    };
+  }, [supported, start]);
+
+  // Live state when active, synthesized state otherwise.
+  const state = voice.active ? voice.state : ambient.state;
+  const liveLevel = voice.active ? voice.liveLevelRef : undefined;
   const engaged = state !== "idle";
+
+  // What to show under the greeting: your words while listening, the reply
+  // while speaking.
+  const subtitle =
+    voice.active && state === "listening"
+      ? voice.transcript
+      : voice.active && state === "speaking"
+        ? voice.reply
+        : "";
+
+  const handleClick = useCallback(() => {
+    if (voice.supported && !voice.active) voice.start();
+  }, [voice.supported, voice.active, voice.start]);
 
   return (
     <main
-      aria-label={`Ambient voice assistant animation, currently ${state}`}
+      onClick={handleClick}
+      aria-label={`Voice assistant, currently ${state}`}
       className="relative h-dvh w-full select-none overflow-hidden bg-black"
     >
       {/* Ember ridge pinned to the lower portion, top edge feathered away. */}
       <div
         className="absolute inset-x-0 bottom-0 h-[62%]"
         style={{
-          maskImage:
-            "linear-gradient(to bottom, transparent 0%, black 24%)",
+          maskImage: "linear-gradient(to bottom, transparent 0%, black 24%)",
           WebkitMaskImage:
             "linear-gradient(to bottom, transparent 0%, black 24%)",
         }}
       >
-        <EmberWaveVisualizer state={state} />
+        <EmberWaveVisualizer
+          state={state}
+          liveLevel={liveLevel}
+          variant={variant}
+        />
+      </div>
+
+      {/* Variation switcher, top center. Stop clicks from reaching the
+          tap-to-start handler on <main>. */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="absolute inset-x-0 top-6 z-20 flex justify-center px-4"
+      >
+        <WaveVariantSwitcher value={variant} onChange={chooseVariant} />
       </div>
 
       {/* Greeting — blur-up on load, softens while the assistant is engaged. */}
@@ -88,6 +169,24 @@ export default function VoiceHero() {
         >
           How can I help you?
         </motion.h1>
+
+        {/* Live transcript / reply, faint under the greeting. */}
+        <div className="mt-4 h-6 max-w-md">
+          <AnimatePresence mode="wait">
+            {subtitle && (
+              <motion.p
+                key={subtitle}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 0.55, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4 }}
+                className="line-clamp-1 text-sm font-light tracking-wide text-white/70"
+              >
+                {subtitle}
+              </motion.p>
+            )}
+          </AnimatePresence>
+        </div>
       </motion.div>
 
       {/* State caption, bottom center. */}
