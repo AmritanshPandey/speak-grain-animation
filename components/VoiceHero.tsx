@@ -3,208 +3,137 @@
 /**
  * VoiceHero
  * =========
- * Full-bleed assistant screen: pure black field, a single greeting line in
- * the upper half, and the ember particle ridge flowing across the lower
- * third.
+ * Host for the browser voice assistant. Owns the voice loop (useBrowserVoice),
+ * the chosen visualization (a sand formation or the spectrum), the conversation
+ * history, and the view mode — Full page, Circle orb, or Chat — rendered by the
+ * matching view component. Two top switchers toggle the view and the variant.
  *
- * Two modes, chosen automatically:
- *   • Live  — when the browser supports speech and the mic is granted, a real
- *             voice loop runs (see useBrowserVoice): your microphone drives
- *             "listening", a short "thinking" beat follows, then the browser
- *             speaks a reply with the wave pulsing per word.
- *   • Ambient — otherwise (unsupported browser, mic denied, or before the
- *             session starts) a synthesized conversation loops so the screen
- *             is never dead.
+ * Conversation is one turn at a time: press Start listening, talk, press Stop;
+ * it thinks, speaks the reply, and returns to idle.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import EmberWaveVisualizer, {
+import { useCallback, useEffect, useState } from "react";
+import {
   DEFAULT_VARIANT,
-  type VoiceState,
-  type WaveVariantId,
+  WAVE_VARIANTS,
 } from "@/components/EmberWaveVisualizer";
 import { useBrowserVoice } from "@/components/useBrowserVoice";
-import WaveVariantSwitcher from "@/components/WaveVariantSwitcher";
+import WaveVariantSwitcher, {
+  type VizOption,
+} from "@/components/WaveVariantSwitcher";
+import MicButton from "@/components/MicButton";
+import FullView from "@/components/views/FullView";
+import CircleView from "@/components/views/CircleView";
+import ChatView from "@/components/views/ChatView";
+import type { Message } from "@/components/voiceTypes";
 
 const VARIANT_KEY = "voiceWaveFormation";
+const VIEW_KEY = "voiceViewMode";
 
-/** One simulated conversation turn, used only as the ambient fallback. */
-const SCRIPT: { state: VoiceState; ms: number }[] = [
-  { state: "idle", ms: 4000 },
-  { state: "listening", ms: 4200 },
-  { state: "thinking", ms: 2400 },
-  { state: "speaking", ms: 5200 },
-  { state: "listening", ms: 3600 },
-  { state: "thinking", ms: 2200 },
-  { state: "speaking", ms: 4600 },
-  { state: "idle", ms: 4600 },
+/** The four particle formations, three spectrum styles, and the gradient orb. */
+const VIZ_OPTIONS: VizOption[] = [
+  ...WAVE_VARIANTS.map((v) => ({ id: v.id, label: v.label, hint: v.hint })),
+  { id: "spectrum", label: "Spectrum", hint: "A glowing ember light wave" },
+  {
+    id: "spectrum-ribbon",
+    label: "Trace",
+    hint: "Mastercard red and yellow spectrum ribbons",
+  },
+  {
+    id: "spectrum-halo",
+    label: "Halo",
+    hint: "A warm neon status halo with hybrid voice motion",
+  },
+  { id: "gradient", label: "Gradient", hint: "Warm glass gradient orb" },
 ];
+const VIZ_IDS = new Set(VIZ_OPTIONS.map((o) => o.id));
 
-const CAPTION: Record<VoiceState, string> = {
-  idle: "",
-  listening: "Listening…",
-  thinking: "Thinking…",
-  speaking: "Speaking…",
-  complete: "",
-};
+// Chat view is hidden for now (ChatView is kept for easy re-enable).
+const VIEW_OPTIONS: VizOption[] = [
+  { id: "full", label: "Full", hint: "Full-screen wave" },
+  { id: "circle", label: "Circle", hint: "Glowing orb" },
+];
+const VIEW_IDS = new Set(VIEW_OPTIONS.map((o) => o.id));
 
 export default function VoiceHero() {
-  const voice = useBrowserVoice();
+  const [messages, setMessages] = useState<Message[]>([]);
 
-  // Color variation, remembered across visits.
-  const [variant, setVariant] = useState<WaveVariantId>(DEFAULT_VARIANT);
+  const voice = useBrowserVoice({
+    onTurn: (user, reply) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        if (user.trim()) next.push({ role: "user", text: user.trim() });
+        next.push({ role: "assistant", text: reply });
+        return next;
+      });
+    },
+  });
+
+  // Persisted visualization + view mode.
+  const [variant, setVariant] = useState<string>(DEFAULT_VARIANT);
+  const [view, setView] = useState<string>("full");
   useEffect(() => {
-    const saved = localStorage.getItem(VARIANT_KEY) as WaveVariantId | null;
-    if (saved) setVariant(saved);
+    const frame = requestAnimationFrame(() => {
+      const v = localStorage.getItem(VARIANT_KEY);
+      if (v && VIZ_IDS.has(v)) setVariant(v);
+      const w = localStorage.getItem(VIEW_KEY);
+      if (w && VIEW_IDS.has(w)) setView(w);
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
-  const chooseVariant = useCallback((v: WaveVariantId) => {
+  const chooseVariant = useCallback((v: string) => {
     setVariant(v);
     localStorage.setItem(VARIANT_KEY, v);
   }, []);
+  const chooseView = useCallback((v: string) => {
+    setView(v);
+    localStorage.setItem(VIEW_KEY, v);
+  }, []);
 
-  // Ambient fallback clock — only advances while the live loop is inactive.
-  const [step, setStep] = useState(0);
-  const ambient = SCRIPT[step];
-  useEffect(() => {
-    if (voice.active) return; // live loop owns the state
-    const timer = setTimeout(
-      () => setStep((s) => (s + 1) % SCRIPT.length),
-      ambient.ms
-    );
-    return () => clearTimeout(timer);
-  }, [step, ambient.ms, voice.active]);
-
-  // Auto-start on load; if blocked (gesture/permission), retry on the first
-  // user interaction, then stop retrying. `start`/`supported` are stable, so
-  // this runs once on mount.
-  const { supported, start } = voice;
-  useEffect(() => {
-    if (!supported) return;
-    let cancelled = false;
-
-    const detach = () => {
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-    };
-    const attempt = () => {
-      start().then((ok) => {
-        if (ok || cancelled) detach();
-      });
-    };
-    const onGesture = () => {
-      detach();
-      attempt();
-    };
-
-    attempt(); // try immediately (auto-prompt on load)
-    window.addEventListener("pointerdown", onGesture);
-    window.addEventListener("keydown", onGesture);
-    return () => {
-      cancelled = true;
-      detach();
-    };
-  }, [supported, start]);
-
-  // Live state when active, synthesized state otherwise.
-  const state = voice.active ? voice.state : ambient.state;
-  const liveLevel = voice.active ? voice.liveLevelRef : undefined;
-  const engaged = state !== "idle";
-
-  // What to show under the greeting: your words while listening, the reply
-  // while speaking.
-  const subtitle =
-    voice.active && state === "listening"
-      ? voice.transcript
-      : voice.active && state === "speaking"
-        ? voice.reply
-        : "";
-
-  const handleClick = useCallback(() => {
-    if (voice.supported && !voice.active) voice.start();
-  }, [voice.supported, voice.active, voice.start]);
+  const viewProps = {
+    variant,
+    state: voice.state,
+    liveLevel: voice.liveLevelRef,
+    voice,
+    messages,
+  };
 
   return (
     <main
-      onClick={handleClick}
-      aria-label={`Voice assistant, currently ${state}`}
+      aria-label={`Voice assistant, ${view} view, currently ${voice.state}`}
       className="relative h-dvh w-full select-none overflow-hidden bg-black"
     >
-      {/* Ember ridge pinned to the lower portion, top edge feathered away. */}
-      <div
-        className="absolute inset-x-0 bottom-0 h-[62%]"
-        style={{
-          maskImage: "linear-gradient(to bottom, transparent 0%, black 24%)",
-          WebkitMaskImage:
-            "linear-gradient(to bottom, transparent 0%, black 24%)",
-        }}
-      >
-        <EmberWaveVisualizer
-          state={state}
-          liveLevel={liveLevel}
-          variant={variant}
-        />
-      </div>
+      {view === "circle" ? (
+        <CircleView {...viewProps} />
+      ) : view === "chat" ? (
+        <ChatView {...viewProps} />
+      ) : (
+        <FullView {...viewProps} />
+      )}
 
-      {/* Variation switcher, top center. Stop clicks from reaching the
-          tap-to-start handler on <main>. */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="absolute inset-x-0 top-6 z-20 flex justify-center px-4"
-      >
-        <WaveVariantSwitcher value={variant} onChange={chooseVariant} />
-      </div>
-
-      {/* Greeting — blur-up on load, softens while the assistant is engaged. */}
-      <motion.div
-        animate={{ opacity: engaged ? 0.4 : 1, y: engaged ? -8 : 0 }}
-        transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-        className="pointer-events-none absolute inset-x-0 top-[28%] z-10 flex flex-col items-center px-6 text-center"
-      >
-        <motion.h1
-          initial={{ opacity: 0, y: 16, filter: "blur(10px)" }}
-          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-          transition={{ duration: 1.1, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="font-[family-name:var(--font-nunito)] text-4xl font-light tracking-[-0.01em] text-white sm:text-6xl"
-        >
-          How can I help you?
-        </motion.h1>
-
-        {/* Live transcript / reply, faint under the greeting. */}
-        <div className="mt-4 h-6 max-w-md">
-          <AnimatePresence mode="wait">
-            {subtitle && (
-              <motion.p
-                key={subtitle}
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 0.55, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.4 }}
-                className="line-clamp-1 text-sm font-light tracking-wide text-white/70"
-              >
-                {subtitle}
-              </motion.p>
-            )}
-          </AnimatePresence>
+      {/* Mic control — one fixed position shared by Full and Circle views. */}
+      {view !== "chat" && (
+        <div className="absolute inset-x-0 bottom-12 z-20 flex justify-center">
+          <MicButton
+            state={voice.state}
+            onStart={voice.startListening}
+            onStop={voice.stopListening}
+          />
         </div>
-      </motion.div>
+      )}
 
-      {/* State caption, bottom center. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-8 z-10 flex justify-center">
-        <AnimatePresence mode="wait">
-          {CAPTION[state] && (
-            <motion.span
-              key={state}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.45, ease: "easeOut" }}
-              className="text-[11px] font-light uppercase tracking-[0.32em] text-white/35"
-            >
-              {CAPTION[state]}
-            </motion.span>
-          )}
-        </AnimatePresence>
+      {/* Top switchers: view mode + visualization. */}
+      <div className="absolute inset-x-0 top-6 z-30 flex flex-wrap items-center justify-center gap-2 px-4">
+        <WaveVariantSwitcher
+          options={VIEW_OPTIONS}
+          value={view}
+          onChange={chooseView}
+        />
+        <WaveVariantSwitcher
+          options={VIZ_OPTIONS}
+          value={variant}
+          onChange={chooseVariant}
+        />
       </div>
     </main>
   );

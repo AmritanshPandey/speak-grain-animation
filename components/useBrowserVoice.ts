@@ -10,24 +10,22 @@
  *   • SpeechRecognition (webkit-prefixed)   → transcribes what you say.
  *   • speechSynthesis                        → speaks a reply aloud.
  *
- * State machine, one turn:
- *   listening → (final transcript) → thinking → speaking → listening …
+ * Explicit one-turn control:
+ *   idle → startListening() → listening → stopListening()
+ *        → thinking → speaking → idle
  *
- * The wave is driven through `liveLevelRef` (read every frame by the
- * visualizer):
+ * The mic session (stream + analyser + recognition) is acquired on the first
+ * startListening() — a real user gesture, which also unlocks speechSynthesis —
+ * and kept alive across turns. Recognition is `continuous`, so a turn keeps
+ * accumulating until you press stop; the reply is generated and spoken, then it
+ * rests at idle (no auto-loop).
+ *
+ * The wave is driven through `liveLevelRef` (read every frame by the visualizer):
  *   • listening — the real mic RMS, so the wave tracks your actual voice.
- *   • speaking  — a per-word pulse seeded by utterance `onboundary` events
- *                 (speechSynthesis output can't be metered by Web Audio, so
- *                 word events are the available real signal); decays between
- *                 words, with a low idle floor so the wave stays alive.
- *   • idle / thinking — null, so the visualizer falls back to its synthesized
- *                 cadence (gentle idle, or the thinking churn).
+ *   • speaking  — a per-word pulse seeded by utterance `onboundary` events.
+ *   • idle / thinking — null, so the visualizer uses its synthesized cadence.
  *
- * Robustness: recognition is restarted with a debounce (never a tight loop),
- * repeated fatal errors fall the whole thing back to the ambient animation,
- * and speaking has a safety timeout for voices that never fire `onend`. If the
- * browser lacks SpeechRecognition (e.g. Firefox), `supported` is false and the
- * caller keeps the synthesized ambient loop.
+ * If the browser lacks SpeechRecognition (e.g. Firefox), `supported` is false.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -76,6 +74,15 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+function canUseMicrophone() {
+  return (
+    typeof window !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    window.isSecureContext &&
+    Boolean(navigator.mediaDevices?.getUserMedia)
+  );
+}
+
 /* --- Reply generator (no LLM) -------------------------------------------- */
 
 /**
@@ -91,7 +98,7 @@ function generateReply(transcript: string): string {
   if (/\b(your name|who are you)\b/.test(t))
     return "I'm your ember voice assistant.";
   if (/\b(thanks|thank you)\b/.test(t)) return "Anytime.";
-  if (/\b(bye|goodbye|stop)\b/.test(t)) return "Talk soon.";
+  if (/\b(bye|goodbye)\b/.test(t)) return "Talk soon.";
   if (t.endsWith("?")) return "That's a good question. Let me think about it.";
   return `You said: ${transcript.trim()}.`;
 }
@@ -100,8 +107,16 @@ function generateReply(transcript: string): string {
 
 type Phase = "idle" | "listening" | "thinking" | "speaking";
 
+/** How many consecutive fatal recognition errors before a turn gives up. */
+const MAX_FATAL_ERRORS = 5;
+
+export interface UseBrowserVoiceOptions {
+  /** Fired once per turn when a reply is produced (user text, reply text). */
+  onTurn?: (userText: string, replyText: string) => void;
+}
+
 export interface BrowserVoice {
-  /** Current loop state, fed straight to the visualizer. */
+  /** Current state, fed straight to the visualizer. */
   state: VoiceState;
   /** Read every frame by the visualizer; null → use synthesized cadence. */
   liveLevelRef: React.RefObject<(() => number) | null>;
@@ -109,30 +124,40 @@ export interface BrowserVoice {
   transcript: string;
   /** The reply currently being spoken (empty unless speaking). */
   reply: string;
-  /** False when the browser lacks SpeechRecognition (caller keeps ambient). */
+  /** False when the browser lacks SpeechRecognition / speechSynthesis. */
   supported: boolean;
-  /** True while a live session is running (mic granted, loop healthy). */
+  /** True while actively capturing the mic. */
+  listening: boolean;
+  /** True while a turn is in progress (listening, thinking, or speaking). */
   active: boolean;
-  /** Begin the loop. Safe to call repeatedly; resolves false if mic denied. */
-  start: () => Promise<boolean>;
+  /** Begin capturing a turn. Resolves false if mic denied / unsupported. */
+  startListening: () => Promise<boolean>;
+  /** End capture → think → speak the reply → idle. */
+  stopListening: () => void;
+  /** Last browser capability or permission issue, if any. */
+  error: string | null;
 }
 
-/** How many consecutive fatal recognition errors before giving up on live. */
-const MAX_FATAL_ERRORS = 5;
-
-export function useBrowserVoice(): BrowserVoice {
+export function useBrowserVoice(
+  options: UseBrowserVoiceOptions = {}
+): BrowserVoice {
   const [state, setState] = useState<VoiceState>("idle");
   const [transcript, setTranscript] = useState("");
   const [reply, setReply] = useState("");
-  const [active, setActive] = useState(false);
 
   const supported =
+    canUseMicrophone() &&
     typeof window !== "undefined" &&
-    getRecognitionCtor() !== null &&
     "speechSynthesis" in window;
+  const [error, setError] = useState<string | null>(null);
 
-  // Frame-read level source. Holds either a function (listening/speaking) or
-  // null (idle/thinking → synthesized cadence).
+  // Keep the latest onTurn without re-creating callbacks.
+  const onTurnRef = useRef(options.onTurn);
+  useEffect(() => {
+    onTurnRef.current = options.onTurn;
+  }, [options.onTurn]);
+
+  // Frame-read level source. A function while listening/speaking, else null.
   const liveLevelRef = useRef<(() => number) | null>(null);
 
   // Audio graph + recognition handles (refs so they survive re-renders).
@@ -141,13 +166,13 @@ export function useBrowserVoice(): BrowserVoice {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const freqRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const sessionReadyRef = useRef(false);
 
-  // Logical phase tracked in a ref so async handlers never read stale state
-  // or trigger render storms.
+  // Logical phase tracked in a ref so async handlers never read stale state.
   const phaseRef = useRef<Phase>("idle");
   const transcriptRef = useRef("");
-  const runningRef = useRef(false); // session alive?
   const recActiveRef = useRef(false); // recognition currently started?
+  const stopRequestedRef = useRef(false); // user pressed stop this turn?
   const fatalCount = useRef(0);
   const thinkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,8 +190,6 @@ export function useBrowserVoice(): BrowserVoice {
     let sum = 0;
     for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
     const rms = Math.sqrt(sum / buf.length) / 255; // 0–1
-    // Punchy expansion: quiet speech still registers, but louder moments
-    // drive hard toward the top so the wave reacts dramatically.
     return Math.min(1, Math.pow(rms, 0.6) * 2.8);
   }, []);
 
@@ -178,61 +201,30 @@ export function useBrowserVoice(): BrowserVoice {
     return Math.min(1, 0.14 + decayed);
   }, []);
 
-  /** Tear the live session down and hand the screen back to the ambient loop. */
-  const goAmbient = useCallback(() => {
-    runningRef.current = false;
-    recActiveRef.current = false;
+  /** Settle to idle, ready for the next turn. */
+  const toIdle = useCallback(() => {
     phaseRef.current = "idle";
-    if (restartTimer.current) clearTimeout(restartTimer.current);
-    if (thinkTimer.current) clearTimeout(thinkTimer.current);
-    if (speakSafety.current) clearTimeout(speakSafety.current);
     liveLevelRef.current = null;
-    try {
-      recognitionRef.current?.abort();
-    } catch {
-      /* noop */
-    }
-    try {
-      window.speechSynthesis?.cancel();
-    } catch {
-      /* noop */
-    }
-    setActive(false);
     setState("idle");
   }, []);
 
-  /** (Re)start recognition and enter the listening state. */
-  const beginListening = useCallback(() => {
-    if (!runningRef.current) return;
-    const rec = recognitionRef.current;
-    if (!rec) return;
+  /** Visual-only fallback so the control never feels dead in Chrome. */
+  const beginFallbackListening = useCallback((message: string) => {
+    setError(message);
+    stopRequestedRef.current = false;
+    fatalCount.current = 0;
     transcriptRef.current = "";
     setTranscript("");
+    setReply("");
     phaseRef.current = "listening";
     setState("listening");
-    liveLevelRef.current = micLevel;
-    if (recActiveRef.current) return; // already running
-    try {
-      rec.start();
-      recActiveRef.current = true;
-    } catch {
-      // start() throws if it's mid-stop; onend will schedule the next start.
-    }
-  }, [micLevel]);
+    liveLevelRef.current = null;
+    return true;
+  }, []);
 
-  /** Debounced restart so a flaky engine can never spin in a tight loop. */
-  const scheduleRestart = useCallback(() => {
-    if (!runningRef.current) return;
-    if (restartTimer.current) clearTimeout(restartTimer.current);
-    restartTimer.current = setTimeout(() => {
-      if (phaseRef.current === "listening") beginListening();
-    }, 280);
-  }, [beginListening]);
-
-  /** Speak a reply, driving the wave from word boundaries; then resume. */
+  /** Speak a reply, driving the wave from word boundaries; then idle. */
   const speak = useCallback(
     (text: string) => {
-      if (!runningRef.current) return;
       setReply(text);
       phaseRef.current = "speaking";
       setState("speaking");
@@ -242,9 +234,8 @@ export function useBrowserVoice(): BrowserVoice {
       const finish = () => {
         if (speakSafety.current) clearTimeout(speakSafety.current);
         if (phaseRef.current !== "speaking") return; // already moved on
-        liveLevelRef.current = null;
         setReply("");
-        beginListening();
+        toIdle();
       };
 
       const u = new SpeechSynthesisUtterance(text);
@@ -268,27 +259,45 @@ export function useBrowserVoice(): BrowserVoice {
       }
 
       // Safety: some voices never fire onend. Estimate the utterance length
-      // (~165 wpm) and force a return to listening if it overruns.
+      // (~165 wpm) and force idle if it overruns.
       const words = text.trim().split(/\s+/).length;
       const estMs = Math.min(20000, 1200 + (words / 165) * 60000);
       if (speakSafety.current) clearTimeout(speakSafety.current);
       speakSafety.current = setTimeout(finish, estMs);
     },
-    [speakLevel, beginListening]
+    [speakLevel, toIdle]
   );
 
-  const start = useCallback(async (): Promise<boolean> => {
-    if (runningRef.current) return true;
-    if (!supported) return false;
+  /** Debounced recognition restart so a flaky engine never tight-loops. */
+  const scheduleRestart = useCallback(() => {
+    if (restartTimer.current) clearTimeout(restartTimer.current);
+    restartTimer.current = setTimeout(() => {
+      const rec = recognitionRef.current;
+      if (!rec || phaseRef.current !== "listening" || stopRequestedRef.current) {
+        return;
+      }
+      try {
+        rec.start();
+        recActiveRef.current = true;
+      } catch {
+        /* will retry on the next onend */
+      }
+    }, 280);
+  }, []);
 
-    // 1. Microphone + analyser.
+  /** Build mic + analyser + recognition once; reused across turns. */
+  const ensureSession = useCallback(async (): Promise<boolean> => {
+    if (sessionReadyRef.current) return true;
+    if (!canUseMicrophone()) return false;
+
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      return false; // denied / unavailable → caller keeps ambient
+      return false; // denied / unavailable
     }
     streamRef.current = stream;
+
     const Ctx =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext: typeof AudioContext })
@@ -303,47 +312,33 @@ export function useBrowserVoice(): BrowserVoice {
     analyserRef.current = analyser;
     freqRef.current = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
 
-    // 2. Speech recognition.
-    const Ctor = getRecognitionCtor()!;
+    const Ctor = getRecognitionCtor();
+    if (!Ctor) {
+      sessionReadyRef.current = true;
+      setError("Speech recognition is unavailable; using microphone level only.");
+      return true;
+    }
+
     const rec = new Ctor();
     rec.lang = "en-US";
-    rec.continuous = false;
+    rec.continuous = true; // accumulate the whole turn until explicit stop
     rec.interimResults = true;
 
     rec.onresult = (e: SpeechRecognitionEventLike) => {
       if (phaseRef.current !== "listening") return;
-      fatalCount.current = 0; // a real result → engine is healthy
-      let interim = "";
-      let final = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) final += r[0].transcript;
-        else interim += r[0].transcript;
+      fatalCount.current = 0;
+      // Continuous mode keeps every segment in `results`; concatenate them all
+      // for the cumulative utterance.
+      let full = "";
+      for (let i = 0; i < e.results.length; i++) {
+        full += e.results[i][0].transcript;
       }
-      const text = (final || interim).trim();
+      const text = full.trim();
       transcriptRef.current = text;
       setTranscript(text);
-
-      if (final && text) {
-        // User finished a phrase → think briefly, then reply.
-        try {
-          rec.stop();
-        } catch {
-          /* noop */
-        }
-        phaseRef.current = "thinking";
-        liveLevelRef.current = null; // thinking uses synthesized churn
-        setState("thinking");
-        if (thinkTimer.current) clearTimeout(thinkTimer.current);
-        thinkTimer.current = setTimeout(
-          () => speak(generateReply(transcriptRef.current)),
-          700 + Math.random() * 400
-        );
-      }
     };
 
     rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
-      // "no-speech"/"aborted" are normal idle outcomes; only count outages.
       if (e.error !== "no-speech" && e.error !== "aborted") {
         fatalCount.current += 1;
       }
@@ -351,26 +346,80 @@ export function useBrowserVoice(): BrowserVoice {
 
     rec.onend = () => {
       recActiveRef.current = false;
-      if (!runningRef.current) return;
+      if (phaseRef.current !== "listening" || stopRequestedRef.current) return;
       if (fatalCount.current >= MAX_FATAL_ERRORS) {
-        goAmbient(); // engine unreachable (e.g. headless / offline) → ambient
+        toIdle(); // engine unreachable (e.g. headless / offline) → give up
         return;
       }
-      if (phaseRef.current === "listening") scheduleRestart();
+      scheduleRestart(); // keep the mic open during a listening turn
     };
 
     recognitionRef.current = rec;
-    runningRef.current = true;
-    fatalCount.current = 0;
-    setActive(true);
-    beginListening();
+    sessionReadyRef.current = true;
+    setError(null);
     return true;
-  }, [supported, beginListening, speak, goAmbient]);
+  }, [scheduleRestart, toIdle]);
+
+  const startListening = useCallback(async (): Promise<boolean> => {
+    if (phaseRef.current === "listening") return true;
+    const ok = await ensureSession();
+    if (!ok) {
+      return beginFallbackListening(
+        "Microphone access is unavailable; using simulated listening."
+      );
+    }
+
+    stopRequestedRef.current = false;
+    fatalCount.current = 0;
+    transcriptRef.current = "";
+    setTranscript("");
+    setReply("");
+    phaseRef.current = "listening";
+    setState("listening");
+    liveLevelRef.current = micLevel;
+
+    const rec = recognitionRef.current;
+    if (rec && !recActiveRef.current) {
+      try {
+        rec.start();
+        recActiveRef.current = true;
+      } catch {
+        setError("Speech recognition could not start; using microphone level only.");
+      }
+    }
+    return true;
+  }, [beginFallbackListening, ensureSession, micLevel]);
+
+  const stopListening = useCallback(() => {
+    if (phaseRef.current !== "listening") return;
+    stopRequestedRef.current = true;
+    if (restartTimer.current) clearTimeout(restartTimer.current);
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* noop */
+    }
+    recActiveRef.current = false;
+
+    const text = transcriptRef.current.trim();
+    phaseRef.current = "thinking";
+    liveLevelRef.current = null; // thinking uses the synthesized churn
+    setState("thinking");
+
+    if (thinkTimer.current) clearTimeout(thinkTimer.current);
+    thinkTimer.current = setTimeout(
+      () => {
+        const replyText = generateReply(text);
+        onTurnRef.current?.(text, replyText);
+        speak(replyText);
+      },
+      700 + Math.random() * 400
+    );
+  }, [speak]);
 
   // Teardown on unmount.
   useEffect(() => {
     return () => {
-      runningRef.current = false;
       if (thinkTimer.current) clearTimeout(thinkTimer.current);
       if (restartTimer.current) clearTimeout(restartTimer.current);
       if (speakSafety.current) clearTimeout(speakSafety.current);
@@ -386,8 +435,20 @@ export function useBrowserVoice(): BrowserVoice {
       }
       streamRef.current?.getTracks().forEach((t) => t.stop());
       audioCtxRef.current?.close().catch(() => {});
+      sessionReadyRef.current = false;
     };
   }, []);
 
-  return { state, liveLevelRef, transcript, reply, supported, active, start };
+  return {
+    state,
+    liveLevelRef,
+    transcript,
+    reply,
+    supported,
+    listening: state === "listening",
+    active: state !== "idle",
+    startListening,
+    stopListening,
+    error,
+  };
 }

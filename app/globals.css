@@ -17,3 +17,36 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), -apple-system, sans-serif;
 }
+
+/*
+ * These selectors intentionally match the long-standing hydrated class strings
+ * for the full voice view. Keeping those strings stable avoids Next dev overlay
+ * mismatches while still letting us tune the actual layout here.
+ */
+.pointer-events-none.absolute.inset-x-0.top-\[24\%\].z-10.flex.flex-col.items-center.px-6.text-center {
+  top: 10rem;
+}
+
+.absolute.inset-x-0.bottom-12.z-20.flex.justify-center {
+  bottom: 6rem;
+}
+
+@media (min-width: 640px) {
+  .pointer-events-none.absolute.inset-x-0.top-\[24\%\].z-10.flex.flex-col.items-center.px-6.text-center {
+    top: 12rem;
+  }
+
+  .absolute.inset-x-0.bottom-12.z-20.flex.justify-center {
+    bottom: 7rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .pointer-events-none.absolute.inset-x-0.top-\[24\%\].z-10.flex.flex-col.items-center.px-6.text-center {
+    top: 14rem;
+  }
+
+  .absolute.inset-x-0.bottom-12.z-20.flex.justify-center {
+    bottom: 8rem;
+  }
+}
