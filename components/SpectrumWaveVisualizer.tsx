@@ -228,16 +228,6 @@ const fragmentShader = /* glsl */ `
       float beadArc = smoothstep(0.05, 0.18, a) * (1.0 - smoothstep(0.54, 0.82, a));
       col += champagne * beadBand * bead * beadArc * (0.22 + listening * 0.42 + thinking * 0.25);
 
-      float wx = p.x;
-      float waveWin = smoothstep(-0.42, -0.26, wx) * (1.0 - smoothstep(0.26, 0.42, wx));
-      float waveAmp = (0.036 + energy * 0.085) * (0.65 + uAmp * 0.22);
-      float wave = sin(wx * 17.0 - t * 2.2) + 0.45 * sin(wx * 29.0 + t * 1.55);
-      float waveY = -0.17 + wave * waveAmp * waveWin;
-      float wd = y - waveY;
-      float waveLine = exp(-(wd * wd) / 0.000035) * waveWin;
-      float waveGlow = exp(-(wd * wd) / 0.0018) * waveWin;
-      col += speaking * (champagne * waveLine * 0.92 + orange * waveLine * 0.42 + ember * waveGlow * 0.34 + gold * waveGlow * 0.13);
-
       float velvet = smoothstep(0.075, radius - 0.095, r);
       col *= velvet;
       col *= 0.78 + engaged * 0.18 + speaking * energy * 0.22;
@@ -467,8 +457,7 @@ function SpectrumPlane({
 
 function HaloStatusGlyph({ state }: { state: VoiceState }) {
   const isThinking = state === "thinking";
-  const isSpeaking = state === "speaking";
-  const isListening = state === "listening";
+  if (!isThinking) return null;
 
   return (
     <div
@@ -482,40 +471,23 @@ function HaloStatusGlyph({ state }: { state: VoiceState }) {
           aspectRatio: "1",
           background:
             "radial-gradient(circle, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.46) 50%, rgba(0,0,0,0) 74%)",
-          filter: isListening || isSpeaking ? "drop-shadow(0 0 18px rgba(255,150,34,0.45))" : "drop-shadow(0 0 12px rgba(255,92,0,0.28))",
-          opacity: state === "complete" ? 0.72 : 1,
+          filter: "drop-shadow(0 0 12px rgba(255,92,0,0.28))",
+          opacity: 1,
         }}
       >
-        {isThinking ? (
-          <div className="absolute inset-0 flex items-center justify-center gap-[9%]">
-            {[0, 1, 2].map((i) => (
-              <span
-                key={i}
-                className="block h-[9%] w-[9%] animate-pulse rounded-full bg-[#ffe1a6]"
-                style={{
-                  animationDelay: `${i * 140}ms`,
-                  boxShadow:
-                    "0 0 12px rgba(255,205,110,0.92), 0 0 24px rgba(255,80,0,0.42)",
-                }}
-              />
-            ))}
-          </div>
-        ) : isSpeaking ? (
-          <div className="absolute inset-0 flex items-center justify-center gap-[8%]">
-            {[0, 1, 2].map((i) => (
-              <span
-                key={i}
-                className="block w-[8%] animate-pulse rounded-full bg-[#fff0bf]"
-                style={{
-                  height: `${22 + i * 10}%`,
-                  animationDelay: `${i * 100}ms`,
-                  boxShadow:
-                    "0 0 10px rgba(255,235,180,0.92), 0 0 24px rgba(255,88,0,0.55)",
-                }}
-              />
-            ))}
-          </div>
-        ) : null}
+        <div className="absolute inset-0 flex items-center justify-center gap-[9%]">
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="block h-[9%] w-[9%] animate-pulse rounded-full bg-[#ffe1a6]"
+              style={{
+                animationDelay: `${i * 140}ms`,
+                boxShadow:
+                  "0 0 12px rgba(255,205,110,0.92), 0 0 24px rgba(255,80,0,0.42)",
+              }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

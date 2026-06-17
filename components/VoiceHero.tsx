@@ -43,7 +43,7 @@ const VIZ_OPTIONS: VizOption[] = [
   {
     id: "spectrum-halo",
     label: "Halo",
-    hint: "A warm neon status halo with hybrid voice motion",
+    hint: "A warm neon halo with clean state motion",
   },
   { id: "gradient", label: "Gradient", hint: "Warm glass gradient orb" },
 ];
