@@ -24,6 +24,7 @@ export default function WaveStage({
   spectrumCenterY,
   spectrumScaleX,
   spectrumScaleY,
+  intensity = 1,
 }: {
   variant: string;
   state: VoiceState;
@@ -35,6 +36,8 @@ export default function WaveStage({
   spectrumCenterY?: number;
   spectrumScaleX?: number;
   spectrumScaleY?: number;
+  /** 0–1 animation intensity multiplier applied to voice energy. */
+  intensity?: number;
 }) {
   if (
     variant === "spectrum" ||
@@ -49,6 +52,7 @@ export default function WaveStage({
         centerY={spectrumCenterY}
         scaleX={spectrumScaleX}
         scaleY={spectrumScaleY}
+        intensity={intensity}
         variant={
           variant === "spectrum-halo"
             ? "halo"
@@ -66,6 +70,7 @@ export default function WaveStage({
         liveLevel={liveLevel}
         className={className}
         shape={orbShape}
+        intensity={intensity}
       />
     );
   }
@@ -75,6 +80,7 @@ export default function WaveStage({
       liveLevel={liveLevel}
       variant={variant as WaveVariantId}
       className={className}
+      intensity={intensity}
     />
   );
 }

@@ -29,6 +29,7 @@ import type { Message } from "@/components/voiceTypes";
 
 const VARIANT_KEY = "voiceWaveFormation";
 const VIEW_KEY = "voiceViewMode";
+const INTENSITY_KEY = "voiceIntensity";
 
 /** The four particle formations, three spectrum styles, and the gradient orb. */
 const VIZ_OPTIONS: VizOption[] = [
@@ -69,15 +70,18 @@ export default function VoiceHero() {
     },
   });
 
-  // Persisted visualization + view mode.
+  // Persisted visualization + view mode + intensity.
   const [variant, setVariant] = useState<string>(DEFAULT_VARIANT);
   const [view, setView] = useState<string>("full");
+  const [intensity, setIntensity] = useState<number>(0.65);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       const v = localStorage.getItem(VARIANT_KEY);
       if (v && VIZ_IDS.has(v)) setVariant(v);
       const w = localStorage.getItem(VIEW_KEY);
       if (w && VIEW_IDS.has(w)) setView(w);
+      const n = parseFloat(localStorage.getItem(INTENSITY_KEY) ?? "");
+      if (!isNaN(n)) setIntensity(n);
     });
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -89,6 +93,10 @@ export default function VoiceHero() {
     setView(v);
     localStorage.setItem(VIEW_KEY, v);
   }, []);
+  const chooseIntensity = useCallback((n: number) => {
+    setIntensity(n);
+    localStorage.setItem(INTENSITY_KEY, String(n));
+  }, []);
 
   const viewProps = {
     variant,
@@ -96,6 +104,7 @@ export default function VoiceHero() {
     liveLevel: voice.liveLevelRef,
     voice,
     messages,
+    intensity,
   };
 
   return (
@@ -111,9 +120,10 @@ export default function VoiceHero() {
         <FullView {...viewProps} />
       )}
 
-      {/* Mic control — one fixed position shared by Full and Circle views. */}
+      {/* Mic control + intensity slider — stacked, centered. */}
       {view !== "chat" && (
-        <div className="absolute inset-x-0 bottom-12 z-20 flex justify-center">
+        <div className="absolute inset-x-0 bottom-10 z-20 flex flex-col items-center gap-5">
+          <IntensityMeter value={intensity} onChange={chooseIntensity} />
           <MicButton
             state={voice.state}
             onStart={voice.startListening}
@@ -136,5 +146,46 @@ export default function VoiceHero() {
         />
       </div>
     </main>
+  );
+}
+
+function IntensityMeter({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const pct = Math.round(value * 100);
+  return (
+    <div className="pointer-events-auto flex flex-col items-center gap-2">
+      <span className="text-[9px] font-light uppercase tracking-[0.32em] text-white/30">
+        Intensity
+      </span>
+      <div className="relative flex items-center">
+        {/* Glow layer behind the track */}
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 rounded-full blur-[6px]"
+          style={{
+            width: `${pct}%`,
+            background: "linear-gradient(to right, #C84A00, #F4B84A)",
+            opacity: 0.55,
+          }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+          aria-label="Animation intensity"
+          className="relative h-[3px] w-32 cursor-pointer appearance-none rounded-full outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+          style={{
+            background: `linear-gradient(to right, #C84A00 0%, #F4B84A ${pct}%, rgba(255,255,255,0.12) ${pct}%)`,
+          }}
+        />
+      </div>
+    </div>
   );
 }

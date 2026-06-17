@@ -169,23 +169,25 @@ export default function GradientOrbVisualizer({
   liveLevel,
   className = "",
   shape = "circle",
+  intensity = 1,
 }: {
   state?: VoiceState;
   liveLevel?: React.RefObject<(() => number) | null>;
   className?: string;
   /** "circle" → crisp clipped orb; "fill" → full-bleed rectangle. */
   shape?: "circle" | "fill";
+  intensity?: number;
 }) {
   const coreRef = useRef<HTMLDivElement>(null);
   const foamRef = useRef<HTMLDivElement>(null);
   const sheenRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<VoiceState>(state);
+  const intensityRef = useRef(intensity);
   const blobRefs = useRef<(HTMLDivElement | null)[]>([]);
   const bandRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { intensityRef.current = intensity; }, [intensity]);
 
   // Per-frame ocean motion. Profiles are damped instead of snapped so state
   // changes feel like changing currents rather than hard scene cuts.
@@ -207,7 +209,7 @@ export default function GradientOrbVisualizer({
     const tick = (now: number) => {
       const t = (now - t0) / 1000;
       const target = STATE_PROFILES[stateRef.current];
-      const voice = stateRef.current === "idle" ? 0 : (liveLevel?.current?.() ?? 0);
+      const voice = stateRef.current === "idle" ? 0 : (liveLevel?.current?.() ?? 0) * intensityRef.current;
       const k = 0.045;
       energy += (Math.min(1.45, target.energy + voice * 0.7) - energy) * k;
       speed += (target.speed - speed) * k;

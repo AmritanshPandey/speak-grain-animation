@@ -16,6 +16,7 @@ export default function FullView({
   state,
   liveLevel,
   voice,
+  intensity,
 }: ViewProps) {
   const engaged = state !== "idle";
   const subtitle =
@@ -35,6 +36,7 @@ export default function FullView({
           state={state}
           liveLevel={liveLevel}
           orbShape="fill"
+          intensity={intensity}
         />
       ) : (
         <div
@@ -50,6 +52,7 @@ export default function FullView({
             state={state}
             liveLevel={liveLevel}
             spectrumCenterY={variant === "spectrum-halo" ? 0.58 : undefined}
+            intensity={intensity}
           />
         </div>
       )}

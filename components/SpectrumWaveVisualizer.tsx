@@ -366,6 +366,7 @@ function SpectrumPlane({
   centerY,
   scaleX,
   scaleY,
+  intensity = 1,
 }: {
   state: VoiceState;
   reducedMotion: boolean;
@@ -374,6 +375,7 @@ function SpectrumPlane({
   centerY?: number;
   scaleX?: number;
   scaleY?: number;
+  intensity?: number;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const { size } = useThree();
@@ -447,7 +449,7 @@ function SpectrumPlane({
 
     const u = (mesh.material as THREE.ShaderMaterial).uniforms;
     u.uTime.value = l.time;
-    u.uLevel.value = l.level;
+    u.uLevel.value = l.level * intensity;
     u.uAmp.value = l.amp;
     u.uAspect.value = size.width / size.height;
     u.uState.value = haloModeForState(state);
@@ -527,6 +529,7 @@ export interface SpectrumWaveVisualizerProps {
   centerY?: number;
   scaleX?: number;
   scaleY?: number;
+  intensity?: number;
 }
 
 export default function SpectrumWaveVisualizer({
@@ -537,6 +540,7 @@ export default function SpectrumWaveVisualizer({
   centerY,
   scaleX,
   scaleY,
+  intensity = 1,
 }: SpectrumWaveVisualizerProps) {
   const reducedMotion = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -558,6 +562,7 @@ export default function SpectrumWaveVisualizer({
           centerY={centerY}
           scaleX={scaleX}
           scaleY={scaleY}
+          intensity={intensity}
         />
       </Canvas>
       {variant === "halo" && <HaloStatusGlyph state={state} />}

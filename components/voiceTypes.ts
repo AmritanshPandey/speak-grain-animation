@@ -14,4 +14,5 @@ export interface ViewProps {
   liveLevel?: React.RefObject<(() => number) | null>;
   voice: BrowserVoice;
   messages: Message[];
+  intensity: number;
 }

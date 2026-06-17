@@ -23,6 +23,7 @@ export default function CircleView({
   state,
   liveLevel,
   voice,
+  intensity,
 }: ViewProps) {
   const engaged = state !== "idle";
   const isHalo = variant === "spectrum-halo";
@@ -69,6 +70,7 @@ export default function CircleView({
               spectrumScaleY={
                 isHalo ? 1.14 : isSpectrumRibbon ? 1.24 : undefined
               }
+              intensity={intensity}
             />
             {/* Inner vignette so the wave reads as an orb */}
             <div

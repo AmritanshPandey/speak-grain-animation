@@ -50,3 +50,23 @@ body {
     bottom: 8rem;
   }
 }
+
+/* Intensity meter range thumb */
+input[type="range"].appearance-none::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #F4D8A4;
+  box-shadow: 0 0 6px rgba(244, 184, 74, 0.7), 0 0 12px rgba(200, 74, 0, 0.4);
+  cursor: pointer;
+}
+input[type="range"].appearance-none::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: #F4D8A4;
+  box-shadow: 0 0 6px rgba(244, 184, 74, 0.7), 0 0 12px rgba(200, 74, 0, 0.4);
+  cursor: pointer;
+}

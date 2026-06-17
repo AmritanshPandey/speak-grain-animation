@@ -628,12 +628,14 @@ function ParticleField({
   reducedMotion,
   liveLevel,
   shape,
+  intensity = 1,
 }: {
   state: VoiceState;
   particleCount: number;
   reducedMotion: boolean;
   liveLevel?: React.RefObject<(() => number) | null>;
   shape: number;
+  intensity?: number;
 }) {
   const live = useRef<LiveMotion>({
     time: 0,
@@ -685,11 +687,12 @@ function ParticleField({
     // attached (real mic / spoken-word pulses) it drives the level directly;
     // otherwise the synthesized conversational cadence does.
     const ext = liveLevel?.current;
-    const voice = reducedMotion
+    const rawVoice = reducedMotion
       ? 0
       : ext
         ? Math.min(1, Math.max(0, ext()))
         : stepCadence(cadence.current, state, dt);
+    const voice = rawVoice * intensity;
     const tau = voice > l.voiceLevel ? 0.05 : 0.26;
     l.voiceLevel += (voice - l.voiceLevel) * (1 - Math.exp(-dt / tau));
   });
@@ -830,6 +833,8 @@ export interface EmberWaveVisualizerProps {
   liveLevel?: React.RefObject<(() => number) | null>;
   /** Particle formation — same ember palette, different shape and motion. */
   variant?: WaveVariantId;
+  /** 0–1 animation intensity multiplier applied to voice energy. */
+  intensity?: number;
 }
 
 export default function EmberWaveVisualizer({
@@ -838,6 +843,7 @@ export default function EmberWaveVisualizer({
   className = "",
   liveLevel,
   variant = DEFAULT_VARIANT,
+  intensity = 1,
 }: EmberWaveVisualizerProps) {
   // Respect reduced motion (read once on mount).
   const reducedMotion = useMemo(() => {
@@ -882,6 +888,7 @@ export default function EmberWaveVisualizer({
           reducedMotion={reducedMotion}
           liveLevel={liveLevel}
           shape={shape}
+          intensity={intensity}
         />
       </Canvas>
 
